@@ -1,0 +1,17 @@
+{
+  "title": "Parámetros de entrada",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "codigo_postal": {
+      "title": "Código postal",
+      "type": "string",
+      "pattern": "^[0-9]{5}$",
+      "default": "28002",
+      "description": "Código postal de 5 dígitos para filtrar Idealista."
+    }
+  },
+  "required": ["codigo_postal"],
+  "additionalProperties": false
+}
+
