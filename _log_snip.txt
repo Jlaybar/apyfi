@@ -30,7 +30,7 @@ async def main():
                 proxy_url = await proxy_config.new_url()
             except Exception as e:
                 Actor.log.warning(
-                    f"No se pudo inicializar Apify Proxy automÃ¡ticamente: {e}"
+                    f"No se pudo inicializar Apify Proxy automáticamente: {e}"
                 )
 
             browser = await p.chromium.launch(
@@ -86,7 +86,7 @@ async def main():
                         "status": "success",
                     }
                 )
-                Actor.log.info("Ã‰XITO")
+                await Actor.log.info("ÉXITO")
 
             except Exception as e:
                 await Actor.push_data({"error": str(e), "url": URL})
@@ -96,4 +96,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

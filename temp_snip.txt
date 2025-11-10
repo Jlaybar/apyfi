@@ -21,7 +21,7 @@ async def main():
         api_token = os.getenv("APIFY_API_TOKEN")
         client = ApifyClient(api_token) if api_token else None  # disponible para usos futuros
 
-        Actor.log.info(f"Iniciando scrape para CP {CODIGO_POSTAL}...")
+        await Actor.log.info(f"Iniciando scrape para CP {CODIGO_POSTAL}...")
 
         async with async_playwright() as p:
             proxy_url = None
@@ -29,8 +29,8 @@ async def main():
                 proxy_config = await Actor.create_proxy_configuration()
                 proxy_url = await proxy_config.new_url()
             except Exception as e:
-                Actor.log.warning(
-                    f"No se pudo inicializar Apify Proxy automÃ¡ticamente: {e}"
+                await Actor.log.warning(
+                    f"No se pudo inicializar Apify Proxy automáticamente: {e}"
                 )
 
             browser = await p.chromium.launch(
@@ -86,7 +86,7 @@ async def main():
                         "status": "success",
                     }
                 )
-                Actor.log.info("Ã‰XITO")
+                await Actor.log.info("ÉXITO")
 
             except Exception as e:
                 await Actor.push_data({"error": str(e), "url": URL})
