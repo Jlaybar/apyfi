@@ -1,0 +1,5 @@
+# Entornos locales
+.env
+.env.*
+!.env.example
+

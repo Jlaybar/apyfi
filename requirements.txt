@@ -1,2 +1,4 @@
 apify
 playwright
+apify-client
+python-dotenv
