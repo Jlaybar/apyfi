@@ -44,17 +44,6 @@ def _resolve_postal_code(input_data: dict[str, Any]) -> str:
     return DEFAULT_POSTAL_CODE
 
 
-async def _get_proxy_url() -> str | None:
-    try:
-        proxy_config = await Actor.create_proxy_configuration()
-        return await proxy_config.new_url()
-    except Exception as error:
-        Actor.log.warning(
-            f"No se pudo inicializar Apify Proxy automaticamente: {error}"
-        )
-        return None
-
-
 async def _prepare_page(page: Page) -> None:
     await page.add_init_script(
         """
@@ -82,16 +71,25 @@ async def save_json_file(codigo_postal: str, data: dict[str, Any]) -> None:
         Actor.log.error(f"Error al guardar archivo JSON: {error}")
 
 
+# ... [imports sin cambios]
+
 async def _scrape_postal_code(codigo_postal: str) -> None:
     url = IDEALISTA_URL_TEMPLATE.format(codigo_postal=codigo_postal)
     Actor.log.info(f"Iniciando scrape para CP {codigo_postal}")
 
+    # Crea la configuración del proxy (usa APIFY_API_TOKEN automáticamente)
+    proxy_config = await Actor.create_proxy_configuration()  # <-- ¡SIN PARÁMETROS!
+
     async with async_playwright() as playwright:
-        proxy_url = await _get_proxy_url()
-        browser = await playwright.chromium.launch(
-            headless=True,
-            proxy={"server": proxy_url} if proxy_url else None,
-        )
+        launch_options = {
+            "headless": True,
+        }
+        # Solo añade proxy si se creó correctamente
+        if proxy_config:
+            launch_options["proxy"] = proxy_config  # <-- ¡Aquí está la clave!
+
+        browser = await playwright.chromium.launch(**launch_options)
+        
         context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
             locale="es-ES",
@@ -108,7 +106,7 @@ async def _scrape_postal_code(codigo_postal: str) -> None:
                 timeout=PAGE_TIMEOUT_MS,
             )
             if response is None:
-                raise RuntimeError("No se recibio respuesta HTTP inicial.")
+                raise RuntimeError("No se recibió respuesta HTTP inicial.")
             if response.status >= 400:
                 Actor.log.warning(
                     f"Respuesta HTTP {response.status} durante la carga de {url}"
