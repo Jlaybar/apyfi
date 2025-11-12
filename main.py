@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 from typing import Any
 
 from apify import Actor
@@ -63,6 +65,23 @@ async def _prepare_page(page: Page) -> None:
     await page.set_extra_http_headers(HEADERS)
 
 
+async def save_json_file(codigo_postal: str, data: dict[str, Any]) -> None:
+    """Guarda los datos extraidos como JSON en data/casa/{codigo_postal}."""
+    try:
+        target_dir = os.path.join("data", "casa", codigo_postal)
+        os.makedirs(target_dir, exist_ok=True)
+
+        filename = f"scraped_data_{codigo_postal}.json"
+        filepath = os.path.join(target_dir, filename)
+
+        with open(filepath, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=4)
+
+        Actor.log.info(f"Archivo JSON guardado en: {filepath}")
+    except Exception as error:
+        Actor.log.error(f"Error al guardar archivo JSON: {error}")
+
+
 async def _scrape_postal_code(codigo_postal: str) -> None:
     url = IDEALISTA_URL_TEMPLATE.format(codigo_postal=codigo_postal)
     Actor.log.info(f"Iniciando scrape para CP {codigo_postal}")
@@ -94,14 +113,14 @@ async def _scrape_postal_code(codigo_postal: str) -> None:
                 Actor.log.warning(
                     f"Respuesta HTTP {response.status} durante la carga de {url}"
                 )
-                await Actor.push_data(
-                    {
-                        "codigo_postal": codigo_postal,
-                        "url": url,
-                        "status": "http_error",
-                        "status_code": response.status,
-                    }
-                )
+                payload = {
+                    "codigo_postal": codigo_postal,
+                    "url": url,
+                    "status": "http_error",
+                    "status_code": response.status,
+                }
+                await Actor.push_data(payload)
+                await save_json_file(codigo_postal, payload)
                 return
 
             await page.wait_for_selector(ITEMS_SELECTOR, timeout=20_000)
@@ -109,26 +128,26 @@ async def _scrape_postal_code(codigo_postal: str) -> None:
             await asyncio.sleep(SCROLL_DELAY_SECONDS)
 
             html = await page.content()
-            await Actor.push_data(
-                {
-                    "codigo_postal": codigo_postal,
-                    "url": url,
-                    "status": "success",
-                    "html": html,
-                }
-            )
+            payload = {
+                "codigo_postal": codigo_postal,
+                "url": url,
+                "status": "success",
+                "html": html,
+            }
+            await Actor.push_data(payload)
+            await save_json_file(codigo_postal, payload)
             Actor.log.info(f"Scrape completado para {codigo_postal}")
 
         except Exception as error:
             Actor.log.error(f"Error durante el scrape: {error}")
-            await Actor.push_data(
-                {
-                    "codigo_postal": codigo_postal,
-                    "url": url,
-                    "status": "error",
-                    "error": str(error),
-                }
-            )
+            payload = {
+                "codigo_postal": codigo_postal,
+                "url": url,
+                "status": "error",
+                "error": str(error),
+            }
+            await Actor.push_data(payload)
+            await save_json_file(codigo_postal, payload)
         finally:
             await context.close()
             await browser.close()
