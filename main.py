@@ -71,34 +71,27 @@ async def _scrape_postal_code(codigo_postal: str) -> None:
     url = IDEALISTA_URL_TEMPLATE.format(codigo_postal=codigo_postal)
     Actor.log.info(f"Iniciando scrape para CP {codigo_postal}")
 
-    # --- VERIFICACIÓN DEL TOKEN ---
     token = os.getenv("APIFY_TOKEN")
     Actor.log.info(f"APIFY_TOKEN: {'Encontrado' if token else 'NO encontrado'}")
 
-    # --- INICIALIZAR proxy_config SIEMPRE ---
-    proxy_config = None
-
+    proxy_url = None
     if token:
         try:
             proxy_config = await Actor.create_proxy_configuration(
                 groups=['RESIDENTIAL'],
                 country_code='ES'
             )
-            Actor.log.info("Proxy RESIDENTIAL (ES) configurado con éxito")
+            proxy_url = await proxy_config.new_url()
+            Actor.log.info(f"Proxy URL: {proxy_url}")
         except Exception as e:
-            Actor.log.warning(f"Proxy no disponible: {e}. Continuando sin proxy.")
+            Actor.log.warning(f"Proxy falló: {e}. Sin proxy.")
     else:
-        Actor.log.warning("Sin APIFY_TOKEN → sin proxy → alto riesgo de 403")
+        Actor.log.warning("Sin token → sin proxy")
 
-    # --- PLAYWRIGHT ---
     async with async_playwright() as playwright:
         launch_options = {"headless": True}
-
-        # Solo añade proxy si se creó correctamente
-        if proxy_config:
-            launch_options["proxy"] = proxy_config
-        else:
-            Actor.log.info("Navegando sin proxy (riesgo de bloqueo)")
+        if proxy_url:
+            launch_options["proxy"] = {"server": proxy_url}
 
         browser = await playwright.chromium.launch(**launch_options)
         context = await browser.new_context(
@@ -112,11 +105,8 @@ async def _scrape_postal_code(codigo_postal: str) -> None:
 
         try:
             response = await page.goto(url, wait_until="networkidle", timeout=PAGE_TIMEOUT_MS)
-            if not response:
-                raise RuntimeError("Sin respuesta del servidor")
-
-            status_code = response.status
-            Actor.log.info(f"Respuesta HTTP: {status_code}")
+            status_code = response.status if response else 0
+            Actor.log.info(f"HTTP {status_code}")
 
             if status_code >= 400:
                 payload = {
@@ -136,13 +126,13 @@ async def _scrape_postal_code(codigo_postal: str) -> None:
                     "status": "success",
                     "html": html,
                 }
-                Actor.log.info("Scrape exitoso: HTML obtenido")
+                Actor.log.info("HTML scrapeado con éxito")
 
             await Actor.push_data(payload)
             await save_json_file(codigo_postal, payload)
 
         except Exception as error:
-            Actor.log.error(f"Error durante el scrape: {error}")
+            Actor.log.error(f"Error: {error}")
             payload = {
                 "codigo_postal": codigo_postal,
                 "url": url,
@@ -155,6 +145,7 @@ async def _scrape_postal_code(codigo_postal: str) -> None:
         finally:
             await context.close()
             await browser.close()
+
 
 
 async def main() -> None:
