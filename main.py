@@ -1,99 +1,145 @@
-import asyncio
-import os
-from apify import Actor
-from apify_client import ApifyClient
-from playwright.async_api import async_playwright
-from dotenv import load_dotenv
+from __future__ import annotations
 
-# Carga variables desde .env (para ejecuciones locales)
+import asyncio
+from typing import Any
+
+from apify import Actor
+from dotenv import load_dotenv
+from playwright.async_api import Page, async_playwright
+
 load_dotenv()
 
+DEFAULT_POSTAL_CODE = "28002"
+IDEALISTA_URL_TEMPLATE = (
+    "https://www.idealista.com/geo/venta-viviendas/"
+    "codigo-postal-{codigo_postal}/con-de-tres-dormitorios/pagina-1"
+)
+ITEMS_SELECTOR = ".items-container"
+SCROLL_DELAY_SECONDS = 2
+PAGE_TIMEOUT_MS = 60_000
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/129.0.0.0 Safari/537.36"
+)
+HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "es-ES,es;q=0.9",
+    "Sec-CH-UA": '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
+    "Sec-CH-UA-Platform": '"Windows"',
+}
 
-async def main():
-    async with Actor:
-        input_data = await Actor.get_input() or {}
-        CODIGO_POSTAL = input_data.get("codigo_postal", "28002")
-        URL = (
-            f"https://www.idealista.com/geo/venta-viviendas/"
-            f"codigo-postal-{CODIGO_POSTAL}/con-de-tres-dormitorios/pagina-1"
+
+def _resolve_postal_code(input_data: dict[str, Any]) -> str:
+    """Valida el codigo postal recibido y aplica un valor por defecto si es necesario."""
+    raw_value = str(input_data.get("codigo_postal", DEFAULT_POSTAL_CODE)).strip()
+    if len(raw_value) == 5 and raw_value.isdigit():
+        return raw_value
+
+    Actor.log.warning(
+        f"Codigo postal invalido en el input. Se utilizara el valor por defecto {DEFAULT_POSTAL_CODE}."
+    )
+    return DEFAULT_POSTAL_CODE
+
+
+async def _get_proxy_url() -> str | None:
+    try:
+        proxy_config = await Actor.create_proxy_configuration()
+        return await proxy_config.new_url()
+    except Exception as error:
+        Actor.log.warning(
+            f"No se pudo inicializar Apify Proxy automaticamente: {error}"
         )
+        return None
 
-        api_token = os.getenv("APIFY_API_TOKEN")
-        client = ApifyClient(api_token) if api_token else None  # disponible para usos futuros
 
-        Actor.log.info(f"Iniciando scrape para CP {CODIGO_POSTAL}...")
+async def _prepare_page(page: Page) -> None:
+    await page.add_init_script(
+        """
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        window.chrome = { runtime: {} };
+        """
+    )
+    await page.set_extra_http_headers(HEADERS)
 
-        async with async_playwright() as p:
-            proxy_url = None
-            try:
-                proxy_config = await Actor.create_proxy_configuration()
-                proxy_url = await proxy_config.new_url()
-            except Exception as e:
+
+async def _scrape_postal_code(codigo_postal: str) -> None:
+    url = IDEALISTA_URL_TEMPLATE.format(codigo_postal=codigo_postal)
+    Actor.log.info(f"Iniciando scrape para CP {codigo_postal}")
+
+    async with async_playwright() as playwright:
+        proxy_url = await _get_proxy_url()
+        browser = await playwright.chromium.launch(
+            headless=True,
+            proxy={"server": proxy_url} if proxy_url else None,
+        )
+        context = await browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            locale="es-ES",
+            timezone_id="Europe/Madrid",
+            user_agent=USER_AGENT,
+        )
+        page = await context.new_page()
+        await _prepare_page(page)
+
+        try:
+            response = await page.goto(
+                url,
+                wait_until="networkidle",
+                timeout=PAGE_TIMEOUT_MS,
+            )
+            if response is None:
+                raise RuntimeError("No se recibio respuesta HTTP inicial.")
+            if response.status >= 400:
                 Actor.log.warning(
-                    f"No se pudo inicializar Apify Proxy automáticamente: {e}"
+                    f"Respuesta HTTP {response.status} durante la carga de {url}"
                 )
-
-            browser = await p.chromium.launch(
-                headless=True,
-                proxy={"server": proxy_url} if proxy_url else None,
-            )
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                locale="es-ES",
-                timezone_id="Europe/Madrid",
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/129.0.0.0 Safari/537.36"
-                ),
-            )
-            page = await context.new_page()
-
-            await page.add_init_script(
-                """
-                Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                window.chrome = { runtime: {} };
-                """
-            )
-
-            await page.set_extra_http_headers(
-                {
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "es-ES,es;q=0.9",
-                    "Sec-CH-UA": '\"Google Chrome\";v=\"129\", \"Not=A?Brand\";v=\"8\", \"Chromium\";v=\"129\"',
-                    "Sec-CH-UA-Platform": '\"Windows\"',
-                }
-            )
-
-            try:
-                response = await page.goto(
-                    URL, wait_until="networkidle", timeout=60000
-                )
-                if response.status >= 400:
-                    await Actor.push_data({"error": f"HTTP {response.status}", "url": URL})
-                    return
-
-                await page.wait_for_selector(".items-container", timeout=20000)
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
-
-                html = await page.content()
                 await Actor.push_data(
                     {
-                        "codigo_postal": CODIGO_POSTAL,
-                        "url": URL,
-                        "html": html,
-                        "status": "success",
+                        "codigo_postal": codigo_postal,
+                        "url": url,
+                        "status": "http_error",
+                        "status_code": response.status,
                     }
                 )
-                Actor.log.info("ÉXITO")
+                return
 
-            except Exception as e:
-                await Actor.push_data({"error": str(e), "url": URL})
-            finally:
-                await browser.close()
+            await page.wait_for_selector(ITEMS_SELECTOR, timeout=20_000)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(SCROLL_DELAY_SECONDS)
+
+            html = await page.content()
+            await Actor.push_data(
+                {
+                    "codigo_postal": codigo_postal,
+                    "url": url,
+                    "status": "success",
+                    "html": html,
+                }
+            )
+            Actor.log.info(f"Scrape completado para {codigo_postal}")
+
+        except Exception as error:
+            Actor.log.error(f"Error durante el scrape: {error}")
+            await Actor.push_data(
+                {
+                    "codigo_postal": codigo_postal,
+                    "url": url,
+                    "status": "error",
+                    "error": str(error),
+                }
+            )
+        finally:
+            await context.close()
+            await browser.close()
+
+
+async def main() -> None:
+    async with Actor:
+        input_data = await Actor.get_input() or {}
+        codigo_postal = _resolve_postal_code(input_data)
+        await _scrape_postal_code(codigo_postal)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-

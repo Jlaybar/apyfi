@@ -3,3 +3,9 @@
 .env.*
 !.env.example
 
+# Datos generados por Apify
+storage/
+
+# Archivos temporales
+temp_snip.txt
+_log_snip.txt

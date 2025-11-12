@@ -13,8 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m playwright install chromium && \
     python -m playwright install-deps
 
-# Código fuente
+# Codigo fuente
 COPY . .
 
 CMD ["python", "main.py"]
-
