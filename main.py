@@ -7,140 +7,146 @@ from typing import Any
 
 from apify import Actor
 from dotenv import load_dotenv
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import async_playwright
 
-# Carga variables de entorno desde .env
 load_dotenv()
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN ACTUALIZADA 2025 ---
 DEFAULT_POSTAL_CODE = "28002"
 IDEALISTA_URL_TEMPLATE = (
-    "https://www.idealista.com/geo/venta-viviendas/"
-    "codigo-postal-{codigo_postal}/con-de-tres-dormitorios/pagina-1"
+    "https://www.idealista.com/geo/venta-viviendas/codigo-postal-{codigo_postal}/con-de-tres-dormitorios/"
 )
-ITEMS_SELECTOR = ".items-container"
-SCROLL_DELAY_SECONDS = 2
-PAGE_TIMEOUT_MS = 60_000
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/129.0.0.0 Safari/537.36"
-)
-HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "es-ES,es;q=0.9",
-    "Sec-CH-UA": '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
-    "Sec-CH-UA-Platform": '"Windows"',
-}
-
-
-def _resolve_postal_code(input_data: dict[str, Any]) -> str:
-    raw_value = str(input_data.get("codigo_postal", DEFAULT_POSTAL_CODE)).strip()
-    if len(raw_value) == 5 and raw_value.isdigit():
-        return raw_value
-    Actor.log.warning(
-        f"Codigo postal invalido en el input. Se utilizara el valor por defecto {DEFAULT_POSTAL_CODE}."
-    )
-    return DEFAULT_POSTAL_CODE
-
-
-async def _prepare_page(page: Page) -> None:
-    await page.add_init_script(
-        """
-        Object.defineProperty(navigator, 'webdriver', { get: () => false });
-        window.chrome = { runtime: {} };
-        """
-    )
-    await page.set_extra_http_headers(HEADERS)
-
-
-async def save_json_file(codigo_postal: str, data: dict[str, Any]) -> None:
-    try:
-        target_dir = os.path.join("data", "casa", codigo_postal)
-        os.makedirs(target_dir, exist_ok=True)
-        filepath = os.path.join(target_dir, f"scraped_data_{codigo_postal}.json")
-        with open(filepath, "w", encoding="utf-8") as file:
-            json.dump(data, file, ensure_ascii=False, indent=4)
-        Actor.log.info(f"Archivo JSON guardado en: {filepath}")
-    except Exception as error:
-        Actor.log.error(f"Error al guardar archivo JSON: {error}")
-
-
-
-async def _scrape_postal_code(codigo_postal: str) -> None:
-    url = IDEALISTA_URL_TEMPLATE.format(codigo_postal=codigo_postal)
-    Actor.log.info(f"Iniciando scrape para CP {codigo_postal}")
-
-    token = os.getenv("APIFY_TOKEN")
-    Actor.log.info(f"APIFY_TOKEN: {'Encontrado' if token else 'NO encontrado'}")
-
-    proxy_url = proxy_username = proxy_password = None
-    if token:
-        try:
-            proxy_config = await Actor.create_proxy_configuration(
-                groups=['RESIDENTIAL'], country_code='ES'
-            )
-            info = await proxy_config.new_proxy_info()
-            proxy_url, proxy_username, proxy_password = info.url, info.username, info.password
-            Actor.log.info(f"Proxy listo: {proxy_url}")
-        except Exception as e:
-            Actor.log.warning(f"Proxy no disponible: {e}")
-
-    async with async_playwright() as playwright:
-        launch_options = {"headless": True}
-        if proxy_url:
-            launch_options["proxy"] = {
-                "server": proxy_url,
-                "username": proxy_username,
-                "password": proxy_password,
-            }
-
-        browser = await playwright.chromium.launch(**launch_options)
-        context = await browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            locale="es-ES",
-            timezone_id="Europe/Madrid",
-            user_agent=USER_AGENT,
-        )
-        page = await context.new_page()
-        await _prepare_page(page)
-
-        try:
-            response = await page.goto(url, wait_until="networkidle", timeout=PAGE_TIMEOUT_MS)
-            status = response.status if response else 0
-            Actor.log.info(f"HTTP {status}")
-
-            if status >= 400:
-                payload = {"status": "http_error", "status_code": status, "url": url, "codigo_postal": codigo_postal}
-            else:
-                await page.wait_for_selector(ITEMS_SELECTOR, timeout=20_000)
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(SCROLL_DELAY_SECONDS)
-                html = await page.content()
-                payload = {"status": "success", "html": html, "url": url, "codigo_postal": codigo_postal}
-                Actor.log.info("HTML scrapeado con éxito")
-
-            await Actor.push_data(payload)
-            await save_json_file(codigo_postal, payload)
-
-        except Exception as e:
-            Actor.log.error(f"Error: {e}")
-            await Actor.push_data({"status": "error", "error": str(e)})
-        finally:
-            await context.close()
-            await browser.close()
-
-
-
 
 async def main() -> None:
     async with Actor:
         input_data = await Actor.get_input() or {}
-        codigo_postal = _resolve_postal_code(input_data)
-        await _scrape_postal_code(codigo_postal)
+        codigo_postal = str(input_data.get("codigo_postal", DEFAULT_POSTAL_CODE)).strip()[:5]
+        if not (codigo_postal.isdigit() and len(codigo_postal) == 5):
+            codigo_postal = DEFAULT_POSTAL_CODE
+
+        url = IDEALISTA_URL_TEMPLATE.format(codigo_postal=codigo_postal)
+        Actor.log.info(f"Iniciando scrape para CP {codigo_postal}")
+
+        # Proxy residencial español (OBLIGATORIO para Idealista)
+        proxy_config = await Actor.create_proxy_configuration(
+            groups=['RESIDENTIAL'], 
+            country_code='ES'
+        )
+
+        async with async_playwright() as p:
+            # USAR CHROMIUM CON CANALES REALES (el truco clave 2025)
+            browser = await p.chromium.launch_persistent_context(
+                user_data_dir="/tmp/playwright-chrome",  # importante para persistencia
+                headless=True,
+                executable_path=None,  # deja que Playwright use el bundled
+                channel="chrome",  # ¡¡ESTO ES CLAVE!! (usa Chrome real, no Chromium genérico)
+                proxy=await (await proxy_config.new_proxy_info()).as_playwright_proxy(),
+                viewport={"width": 1920, "height": 1080},
+                locale="es-ES",
+                timezone_id="Europe/Madrid",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+                java_script_enabled=True,
+                bypass_csp=True,
+                # Spoofing avanzado
+                has_touch=False,
+                is_mobile=False,
+                device_scale_factor=1,
+                permissions=["geolocation"],
+                geolocation={"longitude": -3.703790, "latitude": 40.416775},  # Madrid
+                extra_http_headers={
+                    "Accept-Language": "es-ES,es;q=0.9",
+                    "Sec-CH-UA": '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
+                    "Sec-CH-UA-Platform": '"Windows"',
+                    "Sec-CH-UA-Mobile": "?0",
+                    "Upgrade-Insecure-Requests": "1",
+                },
+            )
+
+            page = browser.pages[0] if browser.pages else await browser.new_page()
+
+            # --- STEALTH MÁXIMO ---
+            await page.add_init_script("""
+                // Eliminar rastros de automatización
+                delete navigator.__proto__.webdriver;
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [{name: "Chrome PDF Plugin"}, {name: "Chrome PDF Viewer"}]
+                });
+                Object.defineProperty(navigator, 'languages', { get: () => ['es-ES', 'es'] });
+                window.chrome = { runtime: {}, app: {}, loadTimes: () => {} };
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+            """)
+
+            try:
+                Actor.log.info("Navegando a Idealista...")
+                response = await page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+
+                if response.status >= 400:
+                    Actor.log.info(f"HTTP {response.status} - Bloqueado o error")
+                    await Actor.push_data({
+                        "status": "blocked",
+                        "status_code": response.status,
+                        "codigo_postal": codigo_postal,
+                        "url": url
+                    })
+                    return
+
+                # Esperar a que carguen los anuncios o detectar bloqueo
+                try:
+                    await page.wait_for_selector(".item", timeout=30_000)
+                    Actor.log.info("Anuncios detectados - Acceso exitoso")
+                except:
+                    # Si no hay .item, probablemente Cloudflare o captcha
+                    title = await page.title()
+                    if "just a moment" in title.lower() or "cloudflare" in title.lower():
+                        Actor.log.warning("Detectado Cloudflare challenge - esperando resolución automática...")
+                        await page.wait_for_timeout(15_000)  # a veces se resuelve solo con proxy bueno
+
+                # Scroll suave para cargar todos los anuncios
+                await page.evaluate("""
+                    async () => {
+                        await new Promise((resolve) => {
+                            let totalHeight = 0;
+                            const distance = 300;
+                            const timer = setInterval(() => {
+                                window.scrollBy(0, distance);
+                                totalHeight += distance;
+                                if (totalHeight >= document.body.scrollHeight - window.innerHeight) {
+                                    clearInterval(timer);
+                                    resolve();
+                                }
+                            }, 500);
+                        });
+                    }
+                """)
+
+                await asyncio.sleep(5)
+
+                html = await page.content()
+
+                payload = {
+                    "status": "success",
+                    "html": html,
+                    "url": url,
+                    "codigo_postal": codigo_postal,
+                    "items_count": len(await page.query_selector_all(".item"))
+                }
+
+                await Actor.push_data(payload)
+                Actor.log.info(f"Scrapeado con éxito - {payload['items_count']} anuncios encontrados")
+
+                # Guardar en JSON local
+                os.makedirs(f"data/casa/{codigo_postal}", exist_ok=True)
+                with open(f"data/casa/{codigo_postal}/scraped_data_{codigo_postal}.json", "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=4)
+
+            except Exception as e:
+                Actor.log.exception(f"Error inesperado: {e}")
+                await Actor.push_data({"status": "error", "error": str(e)})
+            finally:
+                await browser.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
